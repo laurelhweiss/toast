@@ -1,8 +1,8 @@
 # TOAST — The On-sky Area Stacking Tool
 
-An interactive Jupyter widget for extracting and stacking fiber spectra from HETDEX data using a freehand lasso selector on a sky image.
+An interactive widget for extracting and stacking IFU spectra as a function of 2D location on-sky. Utilizes a user-drawn lasso selector on an image of a target object. 
 
-Built on top of the [HETDEX API](https://github.com/HETDEX/hetdex_api) and [ELiXer](https://github.com/HETDEX/elixer), based on the original `querywidget.py` by Erin Mentuch Cooper.
+Built for use with HETDEX data alongside [HETDEX API](https://github.com/HETDEX/hetdex_api) and [ELiXer](https://github.com/HETDEX/elixer)
 
 **Author:** Laurel H. Weiss
 
@@ -10,15 +10,14 @@ Built on top of the [HETDEX API](https://github.com/HETDEX/hetdex_api) and [ELiX
 
 ## Features
 
-- Displays a sky cutout centered on a coordinate or HETDEX detectid
-- Overlays fiber positions from `get_fibers_table`
-- Freehand lasso selection of fibers directly on the image
+- Displays HETDEX fiber coverage of an input coordinate (or HETDEX Detectid) on an image cutout.
+- Ability to pan around to any RA/Dec with arrow controls. 
+- A user drawn lasso selects locations of interest directly on the image. The corresponding fiber spectra can then be extracted and stored. 
 - Two extraction modes:
-  - `fibers` — raw calibrated fiber spectra for all selected fibers (default)
-  - `psf` — PSF-weighted extraction at the lasso center via `get_spectra`
-- Stacked spectrum with selectable statistic (`mean`, `median`, `biweight`, `weighted_biweight`)
-- Pan to any RA/Dec with the arrow controls; Reset returns to the original input coordinate
-- 1.5" scale bar on the image; interactive pan/zoom on the spectrum panel
+  - `fibers` — raw calibrated fiber spectra 
+  - `psf` — PSF-weighted extraction at the lasso center
+- Calculates a stacked spectrum from the selected fibers with a specified statistic (`mean`, `median`, `biweight`, `weighted_biweight`)
+- Plots individual spectra and stack in an interactive spectrum panel. 
 
 ---
 
@@ -35,18 +34,13 @@ Built on top of the [HETDEX API](https://github.com/HETDEX/hetdex_api) and [ELiX
 
 ## Installation
 
-No package installation required. Clone the repo and ensure the requirements above are available in your environment, then run the example notebook.
-
 ```bash
-git clone https://github.com/<your-repo>/toast.git
-cd toast
+git clone https://github.com/laurelhweiss/toast.git
 ```
 
 ---
 
 ## Usage
-
-Add `%matplotlib widget` at the top of your notebook, then:
 
 ```python
 %matplotlib widget
@@ -66,6 +60,8 @@ qw = QueryWidget(detectid=3001361984, detections=detects)
 qw = QueryWidget(coords=SkyCoord(32.5314 * u.deg, -0.0705 * u.deg, frame='icrs'))
 ```
 
+NOTE: Detections is only necessary when querying by HETDEX Detectid
+
 **Workflow:** Lasso Select → Confirm Selection → Extract Spectra → (Reset)
 
 After extraction, results are accessible as:
@@ -80,14 +76,14 @@ qw.stacked_err     # stacked error array
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `coords` | `SkyCoord` | — | Sky coordinate to centre the widget on |
+| `coords` | `SkyCoord` | — | Sky coordinate to center the widget on |
 | `detectid` | `int` | — | HETDEX detectid; requires `detections` |
 | `detections` | `Detections` | `None` | Pre-loaded Detections instance |
-| `cutout_size` | `Quantity` | `1.0 arcmin` | Image cutout size |
+| `cutout_size` | `Quantity` | `10 arcsec` | Image cutout size |
 | `spec_mode` | `str` | `'fibers'` | `'fibers'` or `'psf'` |
-| `wave_range` | `tuple` | `(3540, 5450)` | Wavelength range in Å |
+| `wave_range` | `tuple` | `(3540, 5450)` | X-axis wavelength range for spectrum plot|
 | `flux_range` | `tuple` | `None` | Y-axis flux range for spectrum plot |
-| `shotids` | `list` | `None` | Restrict to specific shotids |
+| `shotids` | `list` | `None` | Restrict to specific shots |
 | `stat` | `str` | `'median'` | Stacking statistic |
 
 ---
@@ -102,4 +98,4 @@ qw.stacked_err     # stacked error array
 
 ## Acknowledgements
 
-Built for use with the [HETDEX Survey](https://hetdex.org). Based on `querywidget.py` by Erin Mentuch Cooper.
+Built for use with the [HETDEX Survey](https://hetdex.org). Based upon structure of HETDEX API's `querywidget.py` 
