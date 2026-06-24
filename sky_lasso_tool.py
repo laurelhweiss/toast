@@ -4,16 +4,12 @@ import numpy as np
 
 class PixelLassoSelector:
     """
-    Fast(er) lasso selector that works in the axes data coordinate space.
-
-    The image axes are now in native pixel coordinates (imshow with
-    extent=[-0.5, nx-0.5, -0.5, ny-0.5]), so data_coords must be fiber
-    positions in the same pixel space (obtained via skycoord_to_pixel /
-    _build_fiber_pixel_coords).  RA/Dec are carried along purely for
-    downstream table indexing and are not used for hit-testing.
+    Fast(er) lasso selector that works in pixel space.
 
     Selected points are highlighted semi-transparently in blue; the lasso
     path itself is drawn in black.
+
+    Simple enough to rewrite ra/dec arguments for any 2D coords.
     """
     def __init__(self, fig, ax, data_coords, ra, dec,
                  marker_size_pixels=1.5, alpha_orig=0.05, vertex_stride=3, wcs=None):
@@ -21,13 +17,14 @@ class PixelLassoSelector:
         Parameters
         ----------
         data_coords : array (N, 2)
-            Fiber positions in axes data coordinates (pixel space).
-        ra, dec : array (N,)
-            Sky coordinates carried for selection output; not used for
-            hit-testing.
+            Fiber/object positions in axes data coordinates (pixel space).
+            
+        ra, dec : array (N, 1)
+            Corresponding on-sky coordinates, needed for selection output. 
+            Made for use on small on-sky areas << 1 deg, so xy plane approx ok. 
+            
         marker_size_pixels : float
             Desired selection-highlight marker diameter in data (pixel) units.
-            Converted to matplotlib scatter s (points²) via the axes transform.
         """
 
         self.fig = fig
@@ -45,10 +42,6 @@ class PixelLassoSelector:
         self.selected_dec = np.array([])
 
         # ----- Compute scatter size in points^2 from data (pixel) units -----
-        # The axes are in image pixel space, so we convert marker_size_pixels
-        # (data units) → display points → points² for scatter's s parameter.
-        # This is a purely geometric ratio: data-units / (display-points per
-        # data-unit), giving display-point width, which is then squared.
         self.canvas.draw()  # ensure bbox is valid
         bbox = ax.get_window_extent()
         xlim = ax.get_xlim()
@@ -59,7 +52,7 @@ class PixelLassoSelector:
         width_pts = self.marker_size_pixels / data_per_pt
         self.s = width_pts**2  # matplotlib scatter uses points^2
 
-        # ---- Show selection fiber coverage -----
+        # -------------- Show selection coverage --------------
         self.collection_sel = ax.scatter([], [], s=self.s, color='blue',
                                          alpha=self.alpha_orig,
                                          edgecolors='none', zorder=20)
@@ -81,7 +74,7 @@ class PixelLassoSelector:
 
         path = Path(verts)
 
-        # -------- Bounding box prefilter (for speed) ---------
+        # ----------- Bounding box prefilter (for speed) ------------
         xmin, ymin = verts.min(axis=0)
         xmax, ymax = verts.max(axis=0)
         mask = ((self.data_coords[:,0] >= xmin) & (self.data_coords[:,0] <= xmax) &
@@ -97,7 +90,7 @@ class PixelLassoSelector:
         else:
             self.collection_sel.set_offsets([])
 
-        # ----------- Store selection indices and RA/Dec -------------
+        # -------- Store selection indices, convert to RA/Dec --------
         self.ind = new_ind
         self.selected_ra = self.ra[new_ind]
         self.selected_dec = self.dec[new_ind]
