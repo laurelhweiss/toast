@@ -4,7 +4,7 @@ from __future__ import print_function
 TOAST : The On-sky Area Stacking Tool
 Author: Laurel H. Weiss
 
-Made for use with HETDEX data release. Requires HETDEX API and Elixer
+Made for use with HETDEX data. Requires HETDEX API and Elixer
 software packages. Also requires sky_lasso_tool.py
 
 Built based on HETDEX API's querywidget.py (Author: Erin Mentuch Cooper). 
@@ -32,7 +32,6 @@ from ipywidgets import Layout
 
 from hetdex_api.shot import get_fibers_table
 from hetdex_api.survey import FiberIndex
-from hetdex_api.config import HDRconfig
 from hetdex_tools.get_spec import get_spectra
 
 from astroquery.sdss import SDSS
@@ -41,13 +40,8 @@ from elixer import spectrum_utilities as ESU
 
 from sky_lasso_tool import PixelLassoSelector
 
-try:
-    CONFIG_HDR5 = HDRconfig('hdr5')
-except Exception as e:
-    print("Warning! Cannot find or import HDRconfig from hetdex_api!!", e)
-
-OPEN_DET_FILE = None
-DET_HANDLE = None
+# hetdex_api.detections.Detections takes ~40 seconds to load.
+# Instantiate it once in the notebook before calling QueryWidget:
 
 WAVE = np.linspace(3470, 5540, 1036)
 
@@ -65,8 +59,9 @@ class QueryWidget:
         self,
         coords=None,
         detectid=None,
-        aperture=3.0 * u.arcsec, #this goes into get_cutouts... NOT aperture size for get_spectra, check w Erin
-        cutout_size=1.0 * u.arcmin,
+        detections=None,
+        aperture=3.0 * u.arcsec, # this goes into get_cutouts... NOT aperture size for get_spectra, check w Erin
+        cutout_size=10 * u.arcsec, # wouldn't go any larger than 1 arcmin
         spec_mode="fibers",
         wave_range=(3540, 5450),
         flux_range=None,
@@ -76,6 +71,14 @@ class QueryWidget:
         """
         Parameters
         ----------
+        coords : SkyCoord, optional
+            coordinate to center the widget on.
+        detectid : int, optional
+            HETDEX detectid.  Requires 'detections' to be passed.
+            If both detectid and coords are given, detectid takes priority.
+        detections : hetdex_api.detections.Detections, optional
+            Pre-loaded Detections instance.  Required when querying a
+            detectid.  
         spec_mode : str, optional
             'psf'    — PSF-weighted extraction at center of lasso
                         via get_spectra, one spectrum per shot
@@ -84,9 +87,9 @@ class QueryWidget:
         shotids   : list, optional
                      - option to specify which shots to use, if None, all shots 
                      in region are used
-        avg_type  : str, defaults to median
+        stat  : str, defaults to median
                     - 'mean', 'median', 'biweight', 'weighted_biweight'
-        """
+        """        
         
         if spec_mode not in ("psf", "fibers"):
             raise ValueError("spec_mode must be 'psf' or 'fibers'")
@@ -96,7 +99,8 @@ class QueryWidget:
         self.flux_range = flux_range
         self.shotids = [int(s) for s in shotids] if shotids is not None else None
         self.stat = stat
-        self.survey = "hdr5"  # fixed to HDR5
+        self.detections = detections  
+        self.survey = "hdr5"  # default, overridden by update_det_coords if detectid is used
         self.detectid = detectid
         self.aperture = aperture
         self.cutout_size = cutout_size
@@ -142,28 +146,28 @@ class QueryWidget:
             self.coords = SkyCoord(191.663132 * u.deg, 50.712696 * u.deg, frame="icrs")
             self.detectid = 3003575145
 
-        # Snapshot the resolved input coordinate and detectid so Reset can
-        # return to exactly the state the widget was first called with.
+        # Save the input coordinate and detectid so Reset can return to original state
         self._init_coords   = self.coords
         self._init_detectid = self.detectid
 
         # ----------- Set up new panel structure (matplotlib, previously ginga) ------------
         # Persistent image figure (left panel)
         with plt.ioff():
-            self._fig, self._ax = plt.subplots(figsize=(6, 6))
-            
-        self._fig.subplots_adjust(left=0.12, right=0.97, top=0.97, bottom=0.08)
-        self._ax.set_xlabel("x (pixels)", fontsize=8)
-        self._ax.set_ylabel("y (pixels)", fontsize=8)
+            self._fig, self._ax = plt.subplots(figsize=(5.25, 5.25))
+
+        # Placeholder axes until image loads
+        self._fig.subplots_adjust(left=0.15, right=0.97, top=0.97, bottom=0.1)
+        self._ax.set_xlabel("RA (deg)", fontsize=8)
+        self._ax.set_ylabel("Dec (deg)", fontsize=8)
         self._ax.set_facecolor("black")  # visible placeholder until image loads
 
         canvas = self._fig.canvas
         canvas.toolbar_visible = False
         canvas.header_visible = False
         canvas.resizable = False
-        canvas.layout = Layout(width="600px", height="600px", flex="0 0 auto")
+        canvas.layout = Layout(width="525px", height="525px", flex="0 0 auto")
 
-        # Verify we have an interactive canvas, not Agg (annoying, don't touch)
+        # Verify an interactive canvas, not Agg (annoying, don't touch)
         if "Agg" in type(canvas).__name__:
             raise RuntimeError(
                 "matplotlib backend is Agg, not widget. "
@@ -172,8 +176,8 @@ class QueryWidget:
 
         # Persistent spectra figure (right panel)
         with plt.ioff():
-            self._spec_fig, self._spec_ax = plt.subplots(figsize=(4, 2))
-        self._spec_fig.subplots_adjust(left=0.15, right=0.97, top=0.90, bottom=0.22)
+            self._spec_fig, self._spec_ax = plt.subplots(figsize=(5, 2.5))
+        self._spec_fig.subplots_adjust(left=0.11, right=0.9, top=0.95, bottom=0.2)
         self._spec_ax.set_xlabel(r"$\mathrm{wavelength (\AA)}$", fontsize=8)
         self._spec_ax.set_ylabel(r"$\mathrm{f_{\lambda}~(10^{-17} ergs/s/cm^2/\AA)}$", fontsize=8)
         self._spec_ax.tick_params(labelsize=7)
@@ -182,12 +186,13 @@ class QueryWidget:
             self._spec_ax.set_ylim(*self.flux_range)
 
         spec_canvas = self._spec_fig.canvas
-        spec_canvas.toolbar_visible = False
+        spec_canvas.toolbar_visible = True
+        spec_canvas.toolbar_position = 'right'
         spec_canvas.header_visible = False
         spec_canvas.resizable = False
-        spec_canvas.layout = Layout(width="400px", height="200px", flex="0 0 auto")
+        spec_canvas.layout = Layout(width="500px", height="300px", flex="0 0 auto")
 
-        # --------------- Build widgets (some changes) --------------------
+        # --------------- Build widgets --------------------
 
         self.detectbox = widgets.BoundedIntText(
             value=self.detectid,
@@ -240,7 +245,7 @@ class QueryWidget:
         )
         self.image_panel = widgets.VBox(
             [canvas, self.textimpath],
-            layout=Layout(width="620px", flex="0 0 auto"),
+            layout=Layout(width="520px", flex="0 0 auto"),
         )
         self.rightbox = widgets.VBox([
             widgets.HBox([
@@ -251,7 +256,7 @@ class QueryWidget:
             ]),
             self.marker_table_output,
             self._spec_fig.canvas,
-        ], layout=Layout(width="620px"))
+        ], layout=Layout(width="500px"))
 
         self.topbox = widgets.HBox([
             self.detectbox,
@@ -290,7 +295,7 @@ class QueryWidget:
     def _draw_image(self):
         """
         Redraw cutout on the persistent matplotlib axes in native pixel
-        coordinates, with RA/Dec tick labels derived from the image WCS.
+        coordinates, with RA/Dec tick labels from the image WCS.
         """
         self._safe_cla()
 
@@ -312,19 +317,15 @@ class QueryWidget:
             self._zscale_limits = ZScaleInterval().get_limits(data)
         vmin, vmax = self._zscale_limits
 
-        # imshow in native pixel coords: extent=[left, right, bottom, top]
-        # with origin="lower".  No arcsec conversion needed here.
         self._ax.imshow(data, origin="lower", cmap="gray_r",
                         vmin=vmin, vmax=vmax, interpolation="nearest",
                         extent=[-0.5, nx - 0.5, -0.5, ny - 0.5])
 
-        # Label axes in RA/Dec by formatting tick positions through the WCS.
-        # We pick a handful of evenly-spaced pixel ticks and convert them to
-        # sky coordinates so the labels stay accurate after any pan/zoom.
+        # Fight tick markers
         import matplotlib.ticker as mticker
 
         def _make_ra_formatter(wcs_ref, ny_ref):
-            """Return a FuncFormatter that converts pixel x → RA string."""
+            """Converts pixel x to RA string."""
             def _fmt(x, pos):
                 try:
                     sky = pixel_to_skycoord(x, ny_ref / 2.0, wcs_ref)
@@ -334,7 +335,7 @@ class QueryWidget:
             return mticker.FuncFormatter(_fmt)
 
         def _make_dec_formatter(wcs_ref, nx_ref):
-            """Return a FuncFormatter that converts pixel y → Dec string."""
+            """Converts pixel y to Dec string."""
             def _fmt(y, pos):
                 try:
                     sky = pixel_to_skycoord(nx_ref / 2.0, y, wcs_ref)
@@ -354,20 +355,15 @@ class QueryWidget:
         self._ax.set_ylabel('Dec (deg)', fontsize=8)
         self._ax.set_title("", fontsize=8)
 
-        # Crosshair at the widget centre coordinate
+        # X at input coordinate
         cx, cy = skycoord_to_pixel(self.coords, wcs)
         self._ax.axhline(cy, color="white", lw=0.3, alpha=0.4)
         self._ax.axvline(cx, color="white", lw=0.3, alpha=0.4)
 
-        # 1.5" scale bar, anchored in axes-fraction coordinates so it always
-        # sits in the lower-left corner regardless of image size or pan position.
+        # 1.5" scale bar, anchored to sits in lower left corner 
         from astropy.wcs.utils import proj_plane_pixel_scales
-        pix_scale_arcsec = proj_plane_pixel_scales(wcs)[0] * 3600.0  # arcsec/pixel
-        bar_len_pix = 1.5 / pix_scale_arcsec  # length of 1.5" in image pixels
-
-        # Scale bar position: 5% from left, 5% from bottom, (axes space for 
-        # consistency). Convert to data (pixel) coords using the axes limits 
-        # so the bar length is correct in pixel units.
+        pix_scale_arcsec = proj_plane_pixel_scales(wcs)[0] * 3600.0  
+        bar_len_pix = 1.5 / pix_scale_arcsec 
         ax_x0_frac, ax_y0_frac = 0.05, 0.05
         xlim = self._ax.get_xlim()
         ylim = self._ax.get_ylim()
@@ -383,7 +379,7 @@ class QueryWidget:
 
         self._fig.canvas.draw_idle()
 
-    # -------------- Survey/coordinate helpers (unchanged) -------------------
+    # -------------- Coordinate helpers -------------------
 
     def update_coords(self):
         self.coords = SkyCoord(
@@ -402,10 +398,6 @@ class QueryWidget:
         self._fiber_ra = None
         self._fiber_dec = None
         self._fiber_table = None
-        # NOTE: _fiber_center_coords is intentionally NOT cleared here.
-        # Panning fetches a new image centered on self.coords, but the red plus
-        # should stay pinned to the original input coordinate.  _fiber_center_coords
-        # is only reset by on_det_change (new target) or Reset (back to origin).
         self._fiber_cutout = None
         self.load_image()
 
@@ -426,61 +418,31 @@ class QueryWidget:
         self.load_image()
 
     def update_det_coords(self):
-        import tables as tb
-        detectid_i = self.detectid
-        global OPEN_DET_FILE, DET_HANDLE
-
-        if "CONFIG_HDR5" not in globals():
+        """
+        Get self.detectid coordinate via self.detections catalog
+        """
+        if self.detections is None:
             with self.bottombox:
-                print("HDRconfig not available — cannot resolve detectid to coordinates.")
-
-        # leaving for option to specify an HDR later -- currently, all detectids use HDR5.
-        if (self.detectid >= 3000000000) * (self.detectid < 3090000000):
-            self.det_file = CONFIG_HDR5.detecth5
-        elif (self.detectid >= 3090000000) * (self.detectid < 3100000000):
-            self.det_file = CONFIG_HDR5.contsourceh5
-        elif (self.detectid >= 4000000000) * (self.detectid < 4090000000):
-            self.det_file = CONFIG_HDR5.detecth5
-        elif (self.detectid >= 4090000000) * (self.detectid < 4100000000):
-            self.det_file = CONFIG_HDR5.contsourceh5
-        elif (self.detectid >= 5000000000) * (self.detectid < 5090000000):
-            self.det_file = CONFIG_HDR5.detecth5
-        elif (self.detectid >= 5090000000) * (self.detectid < 5100000000):
-            self.det_file = CONFIG_HDR5.contsourceh5
-        else:
-            with self.bottombox:
-                print("{} does not look like a valid detectid. Checking coodinate input.".format(self.detectid))
+                print("No Detections instance provided. Pass detections=<Detections instance> "
+                      "to QueryWidget to use a detectid.")
             if not hasattr(self, "coords"):
-                print("No coordinate specified. Plotting detectid 3003575145.")
-                self.detectid = 3003575145
                 self.coords = SkyCoord(191.663132 * u.deg, 50.712696 * u.deg, frame="icrs")
             return
 
-        if OPEN_DET_FILE is None:
-            OPEN_DET_FILE = self.det_file
-            DET_HANDLE = tb.open_file(self.det_file, "r")
-        elif self.det_file != OPEN_DET_FILE:
-            DET_HANDLE.close()
-            OPEN_DET_FILE = self.det_file
-            try:
-                DET_HANDLE = tb.open_file(self.det_file, "r")
-            except Exception:
-                with self.bottombox:
-                    print("Could not open {}".format(self.det_file))
-        try:
-            det_row = DET_HANDLE.root.Detections.read_where("detectid == detectid_i")
-            if np.size(det_row) > 0:
-                self.coords = SkyCoord(
-                    det_row["ra"][0] * u.deg, det_row["dec"][0] * u.deg
-                )
-            else:
-                with self.bottombox:
-                    print("{} is not in the {} detect database".format(
-                        detectid_i, self.survey))
-        except Exception:
+        mask = self.detections.detectid == self.detectid
+        if not np.any(mask):
             with self.bottombox:
-                print("{} is not in the {} detect database".format(
-                    detectid_i, self.survey))
+                print("{} not found in Detections catalogue.".format(self.detectid))
+            if not hasattr(self, "coords"):
+                self.coords = SkyCoord(191.663132 * u.deg, 50.712696 * u.deg, frame="icrs")
+            return
+
+        self.coords = SkyCoord(
+            float(self.detections.ra[mask][0])  * u.deg,
+            float(self.detections.dec[mask][0]) * u.deg,
+            frame="icrs",
+        )
+        self.survey = self.detections.survey[mask][0]
 
     # ---------------- Load image (some changes) --------------------
 
@@ -544,7 +506,7 @@ class QueryWidget:
 
         threading.Thread(target=_run, daemon=True).start()
 
-    # --------------- Lasso feature (new) ---------------------
+    # --------------- Lasso feature ---------------------
     # Replaces aperture markers
 
     def _open_fiber_index(self):
@@ -599,9 +561,9 @@ class QueryWidget:
         except Exception as e:
             with self.bottombox:
                 print("Could not load fiber positions ({}). "
-                      "Using pixel grid fallback.".format(e))
+                      "Displaying uniform pixel grid.".format(e))
 
-        # Fallback: uniform grid across cutout pixels
+        # Fallback: uniform markers across cutout pixels
         wcs = cutout["cutout"].wcs
         ny, nx = cutout["cutout"].data.shape
         xs = np.linspace(5, nx - 5, 40)
@@ -691,9 +653,8 @@ class QueryWidget:
 
     def _activate_lasso(self, b=None):
         """
-        Attach PixelLassoSelector to the image axes.
-        
-        Fiber positions are already shown (loaded by _load_fibers_async)
+        Attach PixelLassoSelector to the image axes. Fiber positions 
+        loaded by _load_fibers_async)
         """
         self.bottombox.clear_output()
         self.marker_table_output.clear_output()
@@ -723,8 +684,8 @@ class QueryWidget:
             pixel_coords = _build_fiber_pixel_coords(wcs, self._fiber_ra, self._fiber_dec)
 
             from astropy.wcs.utils import proj_plane_pixel_scales
-            pix_scale_arcsec = proj_plane_pixel_scales(wcs)[0] * 3600.0  # arcsec/pixel
-            marker_px = 1.5 / pix_scale_arcsec  # pixels
+            pix_scale_arcsec = proj_plane_pixel_scales(wcs)[0] * 3600.0  
+            marker_px = 1.5 / pix_scale_arcsec 
 
             self._ax.set_title(
                 "Draw lasso [{} mode] — click 'Confirm Selection' when done".format(
@@ -757,7 +718,6 @@ class QueryWidget:
     def _reset_lasso_button_state(self):
         """
         Usage: click/unclick lasso button for new selection. 
-        
         May remove since re-drawing lasso also does this. tbd
         """
         self.lasso_button.description = "Lasso Select"
@@ -821,8 +781,7 @@ class QueryWidget:
 
     def reset_lasso_on_click(self, b):
         """
-        Revert to the original input coordinate and reload the image,
-        discarding any lasso selection, panned position, and extracted spectra.
+        Revert to the original input coordinate and reload the image
         """
         self._selected_fibers = None
         self.spec_table = None
@@ -832,7 +791,7 @@ class QueryWidget:
         # Restore the original coordinate and detectid
         self.coords   = self._init_coords
         self.detectid = self._init_detectid
-        self._zscale_limits = None  # recalculate ZScale for the original image
+        self._zscale_limits = None  
 
         self._suppress_coord_observe = True
         self.im_ra.value    = self.coords.ra.value
@@ -840,21 +799,20 @@ class QueryWidget:
         self.detectbox.value = self.detectid
         self._suppress_coord_observe = False
 
-        # Clear cached fiber data so they are re-fetched for the original coords
+        # Clear everything in widget
         self._fiber_ra           = None
         self._fiber_dec          = None
         self._fiber_table        = None
         self._fiber_center_coords = None
         self._fiber_cutout       = None
 
-        # Clear outputs
         self.marker_table_output.clear_output()
         self.bottombox.clear_output()
 
-        # Clear spectra plot
         self._spec_ax.cla()
         self._spec_ax.set_xlabel(r"$\mathrm{wavelength (\AA)}$", fontsize=8)
         self._spec_ax.set_xlim(*self.wave_range)
+        
         if self.flux_range is not None:
             self._spec_ax.set_ylim(*self.flux_range)
         self._spec_ax.tick_params(labelsize=7)
@@ -893,8 +851,8 @@ class QueryWidget:
         except Exception:
             pass
 
-    # -------------------- Extract Spec (mostly unchanged) --------------------------
-    # added two modes: PSF extract or use fiber spectra
+    # -------------------- Extract Spec --------------------------
+    # two modes: PSF extract or use fiber spectra
 
     def extract_on_click(self, b):
         self.bottombox.clear_output()
@@ -912,7 +870,7 @@ class QueryWidget:
         """
         Grab individual calibrated fiber spectra via get_fibers_table,
         looping over shotids in the lasso selection. Stored in 
-        self.spec_table. stack in stacked_spec / stacked_err
+        self.spec_table. stack located in stacked_spec / stacked_err
         """
         shotids = np.unique(
             [self._fiberid_to_shot(fid)
@@ -955,13 +913,10 @@ class QueryWidget:
 
         center = SkyCoord(ra_mean * u.deg,dec_mean * u.deg,frame="icrs")
 
-        # Compute PSF centre in pixel space for the marker (image is now in pixel coords)
+        # Compute PSF center in pixel space (for marker)
         cutout_for_wcs = self._fiber_cutout if self._fiber_cutout is not None else self.cutout
         wcs = cutout_for_wcs["cutout"].wcs
 
-        # Use the same center the lasso/fiber dots were drawn against, not
-        # live self.coords, in case the user nudged RA/Dec after confirming
-        # the selection but before clicking Extract Spectra.
         px, py = skycoord_to_pixel(center, wcs)
         self._ax.scatter(px, py, s=50, marker="x", color="blue",
                          linewidths=1, zorder=100)
@@ -978,7 +933,7 @@ class QueryWidget:
             for shot in unique_shots:
                 print("PSF-extracting shot {}...".format(shot))
                 try:
-                    t = get_spectra(center,shotid=int(shot),survey=self.survey)
+                    t = get_spectra(center, shotid=int(shot), survey=self.survey)
                     if t is not None and len(t) > 0:
                         tables.append(t)
                 except Exception as e:
@@ -992,7 +947,7 @@ class QueryWidget:
         self.spec_table = vstack(tables)
         self._draw_spec_axes()
 
-    # -------------------- Plot Spec (some changes) --------------------------
+    # -------------------- Plot Spec --------------------------
 
     def _draw_spec_axes(self):
         """
@@ -1011,21 +966,15 @@ class QueryWidget:
         all_specs, all_errs, all_waves = [], [], []
         if self.spec_mode == "fibers":
             self._spec_ax.set_ylabel(r"$\mathrm{f_{\lambda}~(10^{-17} ergs/s/cm^2/\AA)}$", fontsize=8)
-            self._spec_ax.set_title(
-                "{} fiber spectra".format(len(self.spec_table)), fontsize=8
-            )
             for row in self.spec_table:
                 shotid = self._fiberid_to_shot(row["fiber_id"])
-                self._spec_ax.plot(WAVE, row["calfib"], lw=0.7, alpha=0.8,
+                self._spec_ax.plot(WAVE, row["calfib"], lw=0.5, alpha=0.5,
                                    label=str(row["fiber_id"]))
                 all_specs.append(row["calfib"])
                 all_errs.append(row["calfibe"])
                 all_waves.append(WAVE.tolist())
         else:
             self._spec_ax.set_ylabel(r"$\mathrm{f_{\lambda}~(10^{-17} ergs/s/cm^2/\AA)}$", fontsize=8)
-            self._spec_ax.set_title(
-                "{} PSF spectra".format(len(self.spec_table)), fontsize=8
-            )
             for row in self.spec_table:
                 self._spec_ax.plot(WAVE, row["spec"], lw=0.7, alpha=0.8,
                                    label=str(row["shotid"]))
