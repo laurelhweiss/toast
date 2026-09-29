@@ -143,7 +143,7 @@ class QueryWidget:
             self.coords = coords
             self.detectid = 1000000000
         else:
-            self.coords = SkyCoord(191.663132 * u.deg, 50.712696 * u.deg, frame="icrs")
+            self.coords = SkyCoord(191.662903 * u.deg, 50.712696 * u.deg, frame="icrs")
             self.detectid = 3006340323
 
         # Save the input coordinate and detectid so Reset can return to original state
@@ -424,11 +424,11 @@ class QueryWidget:
         if self.detections is None:
             with self.bottombox:
                 print("No Detections instance provided. Pass detections=<Detections instance> "
-                      "to QueryWidget to use a detectid. Defaulting to 3006340323")
+                      "to QueryWidget to use a detectid.")
             if not hasattr(self, "coords"):
                 self.coords = SkyCoord(191.662903 * u.deg, 50.712696 * u.deg, frame="icrs")
             return
-            
+
         mask = np.array(self.detections.detectid == self.detectid)
         if not np.any(mask):
             with self.bottombox:
@@ -455,25 +455,13 @@ class QueryWidget:
 
         def _fetch():
             try:
-                cats = self.catlib.find_catalogs(position=self.coords)
-
-                mags = []
-                filter_names = []
-                for c in cats:
-                    for f in c.get_filters():
-                        mags.append(c.MAG_LIMIT)
-                        filter_names.append(f)
-
-                sorted_filters = [x[0] for x in sorted(zip(filter_names, mags), key=lambda x: x[1], reverse=True)]
-                
                 self.cutout = self.catlib.get_cutouts(
                     position=self.coords,
                     side=im_size,
                     aperture=mag_aperture,
                     dynamic=False,
-                    filter=sorted_filters,
+                    filter=["r", "g", "f606W"],
                     first=True,
-                    allow_bad_image=False,
                 )[0]
                 self.im_path = self.cutout["path"]
             except Exception:
