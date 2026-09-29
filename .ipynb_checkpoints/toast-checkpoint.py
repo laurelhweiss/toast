@@ -428,7 +428,6 @@ class QueryWidget:
             if not hasattr(self, "coords"):
                 self.coords = SkyCoord(191.662903 * u.deg, 50.712696 * u.deg, frame="icrs")
             return
-            
         mask = np.array(self.detections.detectid == self.detectid)
         if not np.any(mask):
             with self.bottombox:
