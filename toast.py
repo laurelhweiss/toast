@@ -143,8 +143,8 @@ class QueryWidget:
             self.coords = coords
             self.detectid = 1000000000
         else:
-            self.coords = SkyCoord(191.663132 * u.deg, 50.712696 * u.deg, frame="icrs")
-            self.detectid = 3003575145
+            self.coords = SkyCoord(191.662903 * u.deg, 50.712696 * u.deg, frame="icrs")
+            self.detectid = 3006340323
 
         # Save the input coordinate and detectid so Reset can return to original state
         self._init_coords   = self.coords
@@ -426,15 +426,15 @@ class QueryWidget:
                 print("No Detections instance provided. Pass detections=<Detections instance> "
                       "to QueryWidget to use a detectid.")
             if not hasattr(self, "coords"):
-                self.coords = SkyCoord(191.663132 * u.deg, 50.712696 * u.deg, frame="icrs")
+                self.coords = SkyCoord(191.662903 * u.deg, 50.712696 * u.deg, frame="icrs")
             return
 
-        mask = self.detections.detectid == self.detectid
+        mask = np.array(self.detections.detectid == self.detectid)
         if not np.any(mask):
             with self.bottombox:
-                print("{} not found in Detections catalogue.".format(self.detectid))
+                print("{} not found in Detections catalogue. Defaulting to 3006340323".format(self.detectid))
             if not hasattr(self, "coords"):
-                self.coords = SkyCoord(191.663132 * u.deg, 50.712696 * u.deg, frame="icrs")
+                self.coords = SkyCoord(191.662903 * u.deg, 50.712696 * u.deg, frame="icrs")
             return
 
         self.coords = SkyCoord(
